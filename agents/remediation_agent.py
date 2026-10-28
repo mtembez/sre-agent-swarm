@@ -3,13 +3,14 @@
 import logging
 from core.agent import BaseAgent
 from core.models import IncidentState, IncidentStatus, ToolCall
+from core.playbooks import PlaybookEngine
 from tools.sandbox import run_sandboxed_command
 
 logger = logging.getLogger(__name__)
 
 
 class SandboxRemediationAgent(BaseAgent):
-    """SRE agent formulating remediation strategies and executing sandboxed fixes."""
+    """SRE agent formulating remediation strategies and executing sandboxed fixes via Playbooks."""
 
     def __init__(self):
         super().__init__(
@@ -27,31 +28,57 @@ class SandboxRemediationAgent(BaseAgent):
         logger.info("[%s] Executing remediation for incident %s...", self.name, state.incident_id)
         state.status = IncidentStatus.REMEDIATING
 
-        # Select remediation strategy based on root cause
-        rc = (state.root_cause or "").lower()
-        if "pool" in rc:
-            action_desc = "Dynamically scaling connection pool and gracefully cycling worker processes."
-            cmd = "echo '[REMEDIATION] DB_POOL_SIZE scaled from 50 to 150. SIGHUP sent to workers.' && exit 0"
-        elif "out_of_memory" in rc or "oom" in rc:
-            action_desc = "Triggering container memory limit increase and clearing in-memory cache layer."
-            cmd = "echo '[REMEDIATION] Memory ceiling raised to 2GiB. Cache flush completed.' && exit 0"
+        # Match against declarative SRE Playbooks
+        search_sig = f"{state.root_cause or ''} {state.alert.error_message}".lower()
+        playbook = PlaybookEngine.match_playbook(search_sig)
+
+        all_steps_succeeded = True
+        executed_actions = []
+
+        if playbook:
+            thought = f"Matched SRE Playbook [{playbook.playbook_id}]: {playbook.name}. Running pre-flight check..."
+            action_desc = f"Playbook [{playbook.playbook_id}]: {playbook.name}"
+
+            # 1. Pre-flight check
+            if playbook.pre_flight_command:
+                pf_call = ToolCall(tool_name="run_sandboxed_command", arguments={"command": playbook.pre_flight_command})
+                pf_res = await self.execute_tool("run_sandboxed_command", {"command": playbook.pre_flight_command})
+                await self.record_step(state, step=1, thought=thought, tool_call=pf_call, tool_result=pf_res)
+                if not pf_res.success:
+                    all_steps_succeeded = False
+
+            # 2. Sequential remediation steps
+            if all_steps_succeeded:
+                for idx, step in enumerate(playbook.remediation_steps, start=2):
+                    step_thought = f"Executing remediation step {step.step_id} ({step.action_type}): {step.command}"
+                    st_call = ToolCall(tool_name="run_sandboxed_command", arguments={"command": step.command})
+                    st_res = await self.execute_tool("run_sandboxed_command", {"command": step.command})
+                    await self.record_step(state, step=idx, thought=step_thought, tool_call=st_call, tool_result=st_res)
+                    if not st_res.success:
+                        all_steps_succeeded = False
+                        break
+                    executed_actions.append(step.action_type)
+
+            # 3. Rollback if steps failed
+            if not all_steps_succeeded and playbook.rollback_command:
+                rb_call = ToolCall(tool_name="run_sandboxed_command", arguments={"command": playbook.rollback_command})
+                rb_res = await self.execute_tool("run_sandboxed_command", {"command": playbook.rollback_command})
+                await self.record_step(state, step=99, thought="Step failed! Executing automated playbook rollback...", tool_call=rb_call, tool_result=rb_res)
         else:
-            action_desc = f"Executing automated rollback to stable commit prior to {state.suspect_commit}."
-            cmd = f"echo '[REMEDIATION] Automated rollback executed: restored stable upstream container.' && exit 0"
-
-        thought = f"Selected remediation strategy: {action_desc}. Executing in isolated sandbox..."
-        tool_call = ToolCall(tool_name="run_sandboxed_command", arguments={"command": cmd})
-
-        tool_result = await self.execute_tool("run_sandboxed_command", {"command": cmd})
-        await self.record_step(state, step=1, thought=thought, tool_call=tool_call, tool_result=tool_result)
-
-        success = tool_result.success and "exit_code': 0" in str(tool_result.output) or tool_result.success
+            # Fallback container rollback
+            action_desc = f"Executing automated rollback to stable container prior to {state.suspect_commit}."
+            cmd = "echo '[REMEDIATION] Automated rollback executed: restored stable upstream container.' && exit 0"
+            thought = f"No specific playbook matched. {action_desc}"
+            tool_call = ToolCall(tool_name="run_sandboxed_command", arguments={"command": cmd})
+            tool_result = await self.execute_tool("run_sandboxed_command", {"command": cmd})
+            await self.record_step(state, step=1, thought=thought, tool_call=tool_call, tool_result=tool_result)
+            all_steps_succeeded = tool_result.success
 
         state.remediation_action_taken = action_desc
-        state.remediation_success = success
+        state.remediation_success = all_steps_succeeded
         state.add_timeline(
             self.name,
             "REMEDIATION_EXECUTED",
-            f"{action_desc} (Result: {'SUCCESS' if success else 'FAILED'})",
+            f"{action_desc} (Result: {'SUCCESS' if all_steps_succeeded else 'FAILED'})",
         )
         return state
