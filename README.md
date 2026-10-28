@@ -120,15 +120,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Run Deterministic Pytest Suite (Coverage: 92%)
+### 2. Run Deterministic Pytest Suite (Coverage: 95%)
 ```bash
-pytest -v --cov=core --cov=agents --cov=tools --cov=api --cov=chaos --cov=telemetry --cov-report=term-missing
+pytest -v --cov=core --cov=agents --cov=tools --cov=api --cov=chaos --cov=telemetry --cov=cli --cov-report=term-missing
 ```
 
 Output:
 ```text
-============================== 22 passed in 2.45s ==============================
-Coverage: 92%
+============================== 32 passed in 3.32s ==============================
+Coverage: 95%
 ```
 
 ### 3. Run Backend API
