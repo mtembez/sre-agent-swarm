@@ -69,6 +69,29 @@ def test_api_edge_cases(client):
     assert bad_alert.status_code == 400
 
 
+@pytest.mark.asyncio
+async def test_websocket_broadcast_dead_socket_reclamation():
+    from unittest.mock import AsyncMock
+    from api.main import broadcast_to_sockets, connected_websockets
+
+    mock_good_ws = AsyncMock()
+    mock_bad_ws = AsyncMock()
+    mock_bad_ws.send_json.side_effect = ConnectionResetError("Connection lost")
+
+    connected_websockets.extend([mock_good_ws, mock_bad_ws])
+
+    await broadcast_to_sockets({"event": "test_broadcast"})
+
+    mock_good_ws.send_json.assert_called_once_with({"event": "test_broadcast"})
+    mock_bad_ws.send_json.assert_called_once_with({"event": "test_broadcast"})
+    assert mock_bad_ws not in connected_websockets
+    assert mock_good_ws in connected_websockets
+
+    # Clean up
+    if mock_good_ws in connected_websockets:
+        connected_websockets.remove(mock_good_ws)
+
+
 def test_cli_playbooks(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["cli.py", "playbooks"])
     cli.main()
