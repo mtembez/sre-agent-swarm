@@ -21,8 +21,11 @@ jobs:
 
       - name: Static Syntax Verification
         run: |
+          python -m py_compile cli.py
           python -m py_compile core/*.py
           python -m py_compile agents/*.py
+          python -m py_compile chaos/*.py
+          python -m py_compile telemetry/*.py
           python -m py_compile tools/*.py
           python -m py_compile api/*.py
           python -m py_compile tests/*.py
@@ -48,7 +51,7 @@ jobs:
 
       - name: Run Deterministic Pytest Suite with Coverage
         run: |
-          pytest -v --cov=core --cov=agents --cov=tools --cov=api --cov-report=term-missing --cov-report=xml --cov-fail-under=85
+          pytest -v --cov=core --cov=agents --cov=tools --cov=api --cov=chaos --cov=telemetry --cov=cli --cov-report=term-missing --cov-report=xml --cov-fail-under=85
 
   frontend-build:
     name: Frontend React Build Verification

@@ -7,16 +7,21 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from chaos.injector import ChaosInjector, ChaosType
 from core.events import EventBus
 from core.models import Alert, AlertSeverity
+from core.playbooks import PLAYBOOK_REGISTRY
 from core.swarm import SRESwarmOrchestrator
+from telemetry.metrics import MetricsTracker
 
 orchestrator = SRESwarmOrchestrator()
+chaos_injector = ChaosInjector(orchestrator)
 event_bus = EventBus.get_instance()
+metrics_tracker = MetricsTracker.get_instance()
 connected_websockets: List[WebSocket] = []
 
 
@@ -26,6 +31,49 @@ async def health_live(request: Request):
 
 async def health_ready(request: Request):
     return JSONResponse({"status": "READY", "version": "1.0.0"})
+
+
+async def get_metrics(request: Request):
+    """Prometheus metrics endpoint."""
+    return PlainTextResponse(metrics_tracker.generate_prometheus_metrics(), media_type="text/plain; version=0.0.4")
+
+
+async def list_playbooks(request: Request):
+    """List declarative SRE recovery playbooks."""
+    pbs = [
+        {
+            "playbook_id": pb.playbook_id,
+            "name": pb.name,
+            "match_signatures": pb.match_signatures,
+            "steps_count": len(pb.remediation_steps),
+            "post_verification_assertion": pb.post_verification_assertion,
+        }
+        for pb in PLAYBOOK_REGISTRY.values()
+    ]
+    return JSONResponse(pbs)
+
+
+async def inject_chaos(request: Request):
+    """Inject simulated production fault and monitor autonomous Swarm resolution."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    type_str = body.get("chaos_type", "db_pool_starvation")
+    try:
+        chaos_type = ChaosType(type_str)
+    except ValueError:
+        return JSONResponse({"error": f"Invalid chaos type. Supported: {[c.value for c in ChaosType]}"}, status_code=400)
+
+    drill = await chaos_injector.inject_fault(chaos_type)
+    return JSONResponse(drill.model_dump(mode="json"))
+
+
+async def list_drills(request: Request):
+    """List past and active chaos drills with MTTR metrics."""
+    drills = [d.model_dump(mode="json") for d in chaos_injector.list_drills()]
+    return JSONResponse(drills)
 
 
 async def ingest_alert(request: Request):
@@ -138,10 +186,14 @@ event_bus.subscribe(broadcast_to_sockets)
 routes = [
     Route("/health/live", health_live, methods=["GET"]),
     Route("/health/ready", health_ready, methods=["GET"]),
+    Route("/metrics", get_metrics, methods=["GET"]),
     Route("/api/v1/alerts", ingest_alert, methods=["POST"]),
     Route("/api/v1/incidents", list_incidents, methods=["GET"]),
     Route("/api/v1/incidents/{incident_id}", get_incident, methods=["GET"]),
     Route("/api/v1/incidents/{incident_id}/postmortem", get_postmortem, methods=["GET"]),
+    Route("/api/v1/playbooks", list_playbooks, methods=["GET"]),
+    Route("/api/v1/chaos/inject", inject_chaos, methods=["POST"]),
+    Route("/api/v1/chaos/drills", list_drills, methods=["GET"]),
     WebSocketRoute("/ws/stream", websocket_stream),
 ]
 
