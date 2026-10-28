@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual Environment
+.venv/
+env/
+venv/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Logs & Runtime
+*.log
+incident_records/
+postmortems/
+sandbox_workspaces/
+
+# Frontend
+frontend/node_modules
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+.npm/
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/

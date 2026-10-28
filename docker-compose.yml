@@ -1,0 +1,17 @@
+services:
+  sre_swarm:
+    build: .
+    container_name: sre_agent_swarm
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: 8000
+      LOG_LEVEL: INFO
+    volumes:
+      - .:/app
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/ready || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
